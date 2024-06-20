@@ -1,0 +1,9 @@
+{
+    "entity": {
+        "sensor": {
+            "rosario_bus_transport": {
+                "default": "mdi:bus"
+            }
+        }
+    }
+}

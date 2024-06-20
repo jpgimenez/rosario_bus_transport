@@ -1,0 +1,9 @@
+{
+  "domain": "rosario_bus_transport",
+  "name": "Rosario Bus",
+  "codeowners": ["@jpgimenez"],
+  "config_flow": true,  
+  "documentation": "https://github.com/jpgimenez/rosario_bus_transport",
+  "iot_class": "cloud_polling",
+  "version": "0.0.2"
+}
