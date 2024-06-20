@@ -21,6 +21,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 import homeassistant.util.dt as dt_util
 
+from .coordinator import RosarioBusDataUpdateCoordinator
+
 _RESOURCE = "https://ws.rosario.gob.ar/ubicaciones/public/cuandollega"
 
 ATTR_STOP_ID = "Stop ID"
@@ -33,7 +35,6 @@ CONF_STOP_ID = "stopid"
 CONF_ROUTE = "route"
 
 DEFAULT_NAME = "Next Bus"
-
 
 SCAN_INTERVAL = timedelta(minutes=1)
 TIME_STR_FORMAT = "%H:%M"
@@ -59,122 +60,140 @@ def due_in_minutes(timestamp):
     return str(int(diff.total_seconds() / 60))
 
 
-def setup_platform(
+async def async_setup_entry(
     hass: HomeAssistant,
-    config: ConfigType,
-    add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
+    config: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Rosario public transport sensor."""
+    """Load values from configuration and initialize the platform."""
+    _LOGGER.debug(config.data)
     name = config[CONF_NAME]
+    entry_agency = config.data[CONF_AGENCY]
     stop = config[CONF_STOP_ID]
     route = config[CONF_ROUTE]
 
-    data = PublicTransportData(stop, route)
-    add_entities([RosarioPublicTransportSensor(data, stop, route, name)], True)
+    coordinator: RosarioBusDataUpdateCoordinator = hass.data[DOMAIN].get(entry_agency)
+
+    async_add_entities(
+        (
+            RosarioBusDepartureSensor(
+                coordinator,
+                cast(str, config.unique_id),
+                config.data[CONF_AGENCY],
+                config.data[CONF_ROUTE],
+                config.data[CONF_STOP],
+                config.data.get(CONF_NAME) or config.title,
+            ),
+        ),
+    )
 
 
-class RosarioPublicTransportSensor(SensorEntity):
-    """Implementation of an Rosario public transport sensor."""
+class RosarioBusDepartureSensor(
+    CoordinatorEntity[RosarioBusDataUpdateCoordinator], SensorEntity
+):
+    """Sensor class that displays upcoming RosarioBus times.
 
-    _attr_attribution = "Data provided by comollego.rosario.gob.ar"
-    _attr_icon = "mdi:bus"
+    To function, this requires knowing the agency tag as well as the tags for
+    both the route and the stop.
 
-    def __init__(self, data, stop, route, name):
-        """Initialize the sensor."""
-        self.data = data
-        self._name = name
-        self._stop = stop
-        self._route = route
-        self._times = self._state = None
-        self._attr_unique_id = f"{stop}_{route}"        
+    This is possibly a little convoluted to provide as it requires making a
+    request to the service to get these values. Perhaps it can be simplified in
+    the future using fuzzy logic and matching.
+    """
 
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return self._name
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_translation_key = "nextbus"
 
-    @property
-    def native_value(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        if self._times is not None:
-            next_up = "None"
-            if len(self._times) > 1:
-                next_up = f"{self._times[1][ATTR_ROUTE]} in "
-                next_up += self._times[1][ATTR_DUE_IN]
-
-            return {
-                ATTR_DUE_IN: self._times[0][ATTR_DUE_IN],
-                ATTR_DUE_AT: self._times[0][ATTR_DUE_AT],
-                ATTR_STOP_ID: self._stop,
-                ATTR_ROUTE: self._times[0][ATTR_ROUTE],
-                ATTR_NEXT_UP: next_up,
-            }
-
-    @property
-    def native_unit_of_measurement(self):
-        """Return the unit this state is expressed in."""
-        return UnitOfTime.MINUTES
-
-    def update(self) -> None:
-        """Get the latest data from opendata.ch and update the states."""
-        self.data.update()
-        self._times = self.data.info
-        with suppress(TypeError):
-            self._state = self._times[0][ATTR_DUE_IN]
-
-
-class PublicTransportData:
-    """The Class for handling the data retrieval."""
-
-    def __init__(self, stop, route):
-        """Initialize the data object."""
-        self.stop = stop
+    def __init__(
+        self,
+        coordinator: RosarioBusDataUpdateCoordinator,
+        unique_id: str,
+        agency: str,
+        route: str,
+        stop: str,
+        name: str,
+    ) -> None:
+        """Initialize sensor with all required config."""
+        super().__init__(coordinator)
+        self.agency = agency
         self.route = route
-        self.info = [{ATTR_DUE_AT: "n/a", ATTR_ROUTE: self.route, ATTR_DUE_IN: "n/a"}]
+        self.stop = stop
+        self._attr_extra_state_attributes: dict[str, str] = {}
+        self._attr_unique_id = unique_id
+        self._attr_name = name
 
-    def update(self):
-        """Get the latest data from opendata.ch."""
-        params = {}
-        params["parada"] = self.stop
+    def _log_debug(self, message, *args):
+        """Log debug message with prefix."""
+        msg = f"{self.agency}:{self.route}:{self.stop}:{message}"
+        _LOGGER.debug(msg, *args)
 
-        if self.route:
-            params["routeid"] = self.route
+    def _log_err(self, message, *args):
+        """Log error message with prefix."""
+        msg = f"{self.agency}:{self.route}:{self.stop}:{message}"
+        _LOGGER.error(msg, *args)
 
-        params["maxresults"] = 2
-        params["format"] = "json"
+    async def async_added_to_hass(self) -> None:
+        """Read data from coordinator after adding to hass."""
+        self._handle_coordinator_update()
+        await super().async_added_to_hass()
 
-        response = requests.get(_RESOURCE, params, timeout=10)
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Update sensor with new departures times."""
+        results = self.coordinator.get_prediction_data(self.stop, self.route)
+        self._attr_attribution = self.coordinator.get_attribution()
 
-        if response.status_code != HTTPStatus.OK:
-            self.info = [
-                {ATTR_DUE_AT: None, ATTR_ROUTE: self.route, ATTR_DUE_IN: None}
-            ]
+        self._log_debug("Predictions results: %s", results)
+
+        if not results or "Error" in results:
+            self._log_err("Error getting predictions: %s", str(results))
+            self._attr_native_value = None
+            self._attr_extra_state_attributes.pop("upcoming", None)
             return
 
-        result = response.json()
+        # Set detailed attributes
+        self._attr_extra_state_attributes.update(
+            {
+                "agency": str(results.get("agencyTitle")),
+                "route": str(results.get("routeTitle")),
+                "stop": str(results.get("stopTitle")),
+            }
+        )
 
-        self.info = []
-        for item in result:
-            route = item["linea"]["nombre"]
-            if item["linea"]["nombre"] == self.route:
-                for bus in item["arribos"]:
-                    due_at = bus["horaArribo"]
-                    due_in = bus["arriboEnMinutos"]
-                    if due_at is not None and route is not None:
-                        bus_data = {
-                            ATTR_DUE_AT: due_at,
-                            ATTR_ROUTE: route,
-                            ATTR_DUE_IN: str(due_in),
-                        }
-                        self.info.append(bus_data)
+        # List all messages in the attributes
+        messages = listify(results.get("message", []))
+        self._log_debug("Messages: %s", messages)
+        self._attr_extra_state_attributes["message"] = " -- ".join(
+            message.get("text", "") for message in messages
+        )
 
-        if not self.info:
-            self.info = [
-                {ATTR_DUE_AT: None, ATTR_ROUTE: self.route, ATTR_DUE_IN: None}
-            ]
+        # List out all directions in the attributes
+        directions = listify(results.get("direction", []))
+        self._attr_extra_state_attributes["direction"] = ", ".join(
+            direction.get("title", "") for direction in directions
+        )
+
+        # Chain all predictions together
+        predictions = list(
+            chain(
+                *(listify(direction.get("prediction", [])) for direction in directions)
+            )
+        )
+
+        # Short circuit if we don't have any actual bus predictions
+        if not predictions:
+            self._log_debug("No upcoming predictions available")
+            self._attr_native_value = None
+            self._attr_extra_state_attributes["upcoming"] = "No upcoming predictions"
+        else:
+            # Generate list of upcoming times
+            self._attr_extra_state_attributes["upcoming"] = ", ".join(
+                sorted((p["minutes"] for p in predictions), key=int)
+            )
+
+            latest_prediction = maybe_first(predictions)
+            self._attr_native_value = utc_from_timestamp(
+                int(latest_prediction["epochTime"]) / 1000
+            )
+
+        self.async_write_ha_state()

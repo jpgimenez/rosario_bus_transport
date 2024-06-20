@@ -7,7 +7,7 @@ from typing import Any, cast
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .client import RosarioBusClient
+from .client import RosarioBusClient, RouteStop, RosarioBusHTTPError, RosarioBusFormatError
 from .const import DOMAIN
 from .util import listify
 
@@ -25,7 +25,7 @@ class RosarioBusDataUpdateCoordinator(DataUpdateCoordinator):
             name=DOMAIN,
             update_interval=timedelta(seconds=30),
         )
-        self.client = RosarioBusClient(output_format="json", agency=agency)
+        self.client = RosarioBusClient(agency=agency)
         self._agency = agency
         self._stop_routes: set[RouteStop] = set()
         self._predictions: dict[RouteStop, dict[str, Any]] = {}
