@@ -73,20 +73,20 @@ def _get_stop_tags(
 def _validate_import(
     client: RosarioBusClient, agency_tag: str, route_tag: str, stop_tag: str
 ) -> str | tuple[str, str, str]:
-#    agency_tags = _get_agency_tags(client)
-#    agency = agency_tags.get(agency_tag)
-#    if not agency:
-#        return "invalid_agency"
+    agency_tags = _get_agency_tags(client)
+    agency = agency_tags.get(agency_tag)
+    if not agency:
+        return "invalid_agency"
 
-#    route_tags = _get_route_tags(client, agency_tag)
-#    route = route_tags.get(route_tag)
-#    if not route:
-#        return "invalid_route"
+    route_tags = _get_route_tags(client, agency_tag)
+    route = route_tags.get(route_tag)
+    if not route:
+        return "invalid_route"
 
-#    stop_tags = _get_stop_tags(client, agency_tag, route_tag)
-#    stop = stop_tags.get(stop_tag)
-#    if not stop:
-#        return "invalid_stop"
+    stop_tags = _get_stop_tags(client, agency_tag, route_tag)
+    stop = stop_tags.get(stop_tag)
+    if not stop:
+        return "invalid_stop"
 
     return agency, route, stop
 
